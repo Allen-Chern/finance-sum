@@ -1,0 +1,31 @@
+[tools]
+python = "3.12"
+
+[tasks.setup]
+description = "Setup development environment"
+run = """
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+playwright install chromium
+"""
+
+[tasks.sync]
+description = "Run sync command"
+run = "source .venv/bin/activate && financesum sync"
+
+[tasks.login]
+description = "Run login command"
+run = "source .venv/bin/activate && financesum login"
+
+[tasks.test]
+description = "Run tests"
+run = "source .venv/bin/activate && python -m pytest tests/ -v"
+
+[tasks.lint]
+description = "Run linter"
+run = "source .venv/bin/activate && ruff check src/"
+
+[tasks.format]
+description = "Format code"
+run = "source .venv/bin/activate && ruff format src/"
