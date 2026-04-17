@@ -98,6 +98,104 @@ def login(ctx: click.Context) -> None:
 
 
 @cli.command()
+@click.pass_context
+def manual_bill(ctx: click.Context) -> None:
+    """手動新增信用卡帳單 (適用於尚未支援的銀行)"""
+    from datetime import date, datetime
+    from decimal import Decimal
+    from finance_sum.crawlers.base import CreditCardBill
+    from finance_sum.notion import NotionClient
+    from finance_sum.storage import LocalJsonStore
+    from finance_sum.notify import SyncSummary, TelegramNotifier
+
+    config: Config = ctx.obj["config"]
+
+    # 1. 選擇或輸入銀行
+    click.echo("\n請選擇或輸入銀行：")
+    for num, name in _BANK_CHOICES.items():
+        click.echo(f"  [{num}] {name}")
+    click.echo(f"  [0] 其他 (手動輸入)")
+
+    bank_num = click.prompt("輸入編號", default="0")
+    if bank_num == "0":
+        bank = click.prompt("輸入銀行名稱 (例: 渣打)")
+    else:
+        bank = _BANK_CHOICES.get(bank_num, "未知銀行")
+    
+    click.echo(f"✓ 已選擇: {bank}\n")
+
+    # 2. 基本資訊
+    billing_period = click.prompt("帳單期別 (例: 2024/04)", default=date.today().strftime("%Y/%m"))
+    
+    def parse_date(text: str) -> date:
+        for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%m/%d", "%m-%d"):
+            try:
+                dt = datetime.strptime(text, fmt)
+                if fmt in ("%m/%d", "%m-%d"):
+                    dt = dt.replace(year=date.today().year)
+                return dt.date()
+            except ValueError:
+                continue
+        raise ValueError("日期格式不正確 (請用 YYYY/MM/DD 或 MM/DD)")
+
+    closing_date_raw = click.prompt("帳單結帳日 (例: 04/10)", type=str)
+    closing_date = parse_date(closing_date_raw)
+
+    due_date_raw = click.prompt("繳費截止日 (例: 04/25)", type=str)
+    due_date = parse_date(due_date_raw)
+
+    amount = click.prompt("應繳金額", type=Decimal)
+
+    auto_debit_account = click.prompt(
+        "自動扣繳帳戶 (留空表示無)",
+        default="",
+        show_default=False,
+    )
+
+    # 3. 建立帳單物件
+    bill = CreditCardBill(
+        bank=bank,
+        billing_period=billing_period,
+        closing_date=closing_date,
+        due_date=due_date,
+        amount=amount,
+        auto_debit_account=auto_debit_account if auto_debit_account else "",
+    )
+
+    # 4. 儲存至後端
+    click.echo(f"\n🚀 正在儲存至 {config.storage_backend}...")
+    try:
+        if config.storage_backend == "json":
+            store_adapter = LocalJsonStore(config)
+        else:
+            store_adapter = NotionClient(config)
+        
+        new_count = store_adapter.sync_credit_card_bills([bill])
+        
+        if new_count > 0:
+            click.echo(f"✅ 帳單已存入 {config.storage_backend}")
+            
+            # 5. 發送通知
+            if click.confirm("\n是否要發送 Telegram 通知？", default=True):
+                if not config.telegram_bot_token:
+                    click.echo("⚠️ 未設定 TELEGRAM_BOT_TOKEN，略過通知")
+                else:
+                    summary = SyncSummary()
+                    summary.new_bills = [bill]
+                    notifier = TelegramNotifier(config)
+                    asyncio.run(notifier.send_sync_summary(summary))
+                    click.echo("✅ 通知已發送")
+        else:
+            click.echo("ℹ️ 帳單已存在，未重複新增")
+            
+    except Exception as e:
+        click.echo(f"❌ 儲存失敗: {e}", err=True)
+
+
+# ─── sync ───────────────────────────────────────────────────────────────────
+
+
+@cli.command()
 @click.option("--bank", "bank_name", default=None, help="僅同步指定銀行 (例: 台新)")
 @click.pass_context
 def sync(ctx: click.Context, bank_name: str | None) -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -11,9 +10,9 @@ from playwright.async_api import async_playwright
 from finance_sum.config import Config
 from finance_sum.crawlers.base import BalanceResult, CreditCardBill, SyncItem
 from finance_sum.crawlers.registry import BANK_REGISTRY, get_crawler
+from finance_sum.notify import BalanceChange, SyncSummary, TelegramNotifier
 from finance_sum.notion import NotionClient
 from finance_sum.storage import LocalJsonStore
-from finance_sum.notify import BalanceChange, SyncSummary, TelegramNotifier
 from finance_sum.store import CredentialStore
 
 if TYPE_CHECKING:
@@ -43,6 +42,9 @@ class SyncOrchestrator:
         all_balances: list[BalanceResult] = []
         all_bills: list[CreditCardBill] = []
 
+        browser_state_dir = self._config.credentials_path.parent / "browser_state"
+        browser_state_dir.mkdir(parents=True, exist_ok=True)
+
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=self._config.headless)
 
@@ -52,9 +54,15 @@ class SyncOrchestrator:
                     sync_items = [SyncItem(item) for item in credential.sync_items]
                     crawler = get_crawler(bank)
 
-                    page = await browser.new_page()
+                    state_path = browser_state_dir / f"{bank}.json"
+                    context = await browser.new_context(
+                        storage_state=str(state_path) if state_path.exists() else None
+                    )
+                    page = await context.new_page()
                     balances, bills = await crawler.run(page, credential, sync_items)
+                    await context.storage_state(path=str(state_path))
                     await page.close()
+                    await context.close()
 
                     all_balances.extend(balances)
                     all_bills.extend(bills)
@@ -75,7 +83,7 @@ class SyncOrchestrator:
                 store_adapter = LocalJsonStore(self._config)
             else:
                 store_adapter = NotionClient(self._config)
-                
+
             if all_balances:
                 prev_balances = store_adapter.upsert_balances(all_balances)
                 for bal in all_balances:
