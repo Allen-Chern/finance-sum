@@ -59,13 +59,19 @@ class LandBankCrawler(BankCrawler):
 
         for attempt in range(1, _MAX_CAPTCHA_RETRIES + 1):
             logger.info("土銀: 登入嘗試 %d/%d", attempt, _MAX_CAPTCHA_RETRIES)
-            
+
             # 每次登入失敗都重新載入頁面，避免驗證碼過期或狀態卡死
             await page.goto(_LOGIN_URL, wait_until="domcontentloaded")
             await page.wait_for_timeout(2000)
-            
-            # 土銀會強制作 frameset 轉址 (DesktopDefault.htm)，實際內容在 iframe 裡面
-            frame = page.frame_locator("iframe").first
+            logger.debug("土銀: 目前 URL = %s", page.url)
+
+            # 動態偵測登入欄位在主頁面還是 iframe 裡
+            frame: Page | object = page
+            if await page.locator("#hidNationalID").count() == 0:
+                logger.debug("土銀: 主頁面找不到登入欄位，改用 iframe")
+                frame = page.frame_locator("iframe").first
+            else:
+                logger.debug("土銀: 在主頁面找到登入欄位")
 
             # Fill credentials
             await frame.locator("#hidNationalID").fill(credential.id_number)
@@ -111,6 +117,13 @@ class LandBankCrawler(BankCrawler):
                 # 等待直到出現錯誤訊息，或者 #btnLogin 消失 (代表畫面轉走了)
                 # 使用較短的迴圈跟 timeout
                 for _ in range(15):
+                    already_logged_in_el = page.locator('xpath=//*[@id="islogin"]/div[5]')
+                    if await already_logged_in_el.count() > 0:
+                        text = (await already_logged_in_el.inner_text()).strip()
+                        if "您可能已在其它頁籤或相同瀏覽器上登入" in text:
+                            logger.info("土銀: 偵測到已在其他視窗登入，略過此次登入")
+                            return
+
                     if await relogin_el.is_visible():
                         logger.warning("土銀: 偵測到重複登入確認框，點擊「是」")
                         await frame.locator("#btnPopAdd").click()
@@ -241,19 +254,31 @@ class LandBankCrawler(BankCrawler):
 
     async def logout(self, page: Page) -> None:
         logger.info("土銀: 嘗試登出...")
-        logout_btn_xpath = "xpath=//*[@id='btnLogOff']"
+        sel = "#btnLogOff"
         try:
-            # 土銀內容常在 iframe 中
-            base_loc = page
-            if await page.locator("iframe").count() > 0:
-                base_loc = page.frame_locator("iframe").first
-                
-            btn = base_loc.locator(logout_btn_xpath)
+            base_loc = None
+            if await page.locator(sel).count() > 0:
+                base_loc = page
+                logger.debug("土銀: 在主頁面找到登出按鈕")
+            else:
+                frame_loc = page.frame_locator("iframe").first
+                try:
+                    if await frame_loc.locator(sel).count() > 0:
+                        base_loc = frame_loc
+                        logger.debug("土銀: 在 iframe 找到登出按鈕")
+                except Exception:
+                    pass
+
+            if base_loc is None:
+                logger.debug("土銀: 找不到登出按鈕，略過。")
+                return
+
+            btn = base_loc.locator(sel)
             if await btn.is_visible(timeout=5000):
                 await btn.click()
                 await page.wait_for_load_state("networkidle", timeout=10000)
                 logger.info("土銀: 登出完成。")
             else:
-                logger.debug("土銀: 找不到登出按鈕。")
+                logger.debug("土銀: 登出按鈕不可見，略過。")
         except Exception as e:
             logger.debug("土銀: 登出錯誤 - %s", e)

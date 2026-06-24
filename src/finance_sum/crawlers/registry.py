@@ -13,7 +13,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "國泰": ("finance_sum.crawlers.cathay", "CathayCrawler"),
     "土銀": ("finance_sum.crawlers.land_bank", "LandBankCrawler"),
     "王道": ("finance_sum.crawlers.o_bank", "OBankCrawler"),
-    "星展": ("finance_sum.crawlers.dbs", "DBSCrawler"),
     "永豐": ("finance_sum.crawlers.sinopac", "SinopacCrawler"),
     "富邦": ("finance_sum.crawlers.fubon", "FubonCrawler"),
     "聯邦": ("finance_sum.crawlers.union_bank", "UnionBankCrawler"),
